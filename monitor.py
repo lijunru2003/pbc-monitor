@@ -3,6 +3,7 @@ import json
 import os
 import re
 import smtplib
+import time
 from datetime import datetime, timezone, timedelta
 from email.header import Header
 from email.mime.text import MIMEText
@@ -14,14 +15,10 @@ TARGET_URL = "https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html"
 HISTORY_FILE = "pbc_seen.json"
 
 # ================= 关键词过滤配置 =================
-# 标题需包含以下任意一个词（留空 [] 表示不限制标题）
 TITLE_KEYWORDS = ["公告", "计划"]
-
-# 正文需包含以下任意一个词（留空 [] 表示不限制正文）
 BODY_KEYWORDS = ["纪念币"]
 # ==================================================
 
-# 从 GitHub Secrets 读取邮件配置
 SMTP_HOST = os.environ.get("SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
@@ -52,11 +49,28 @@ def matches_any(text: str, keywords: list[str]) -> bool:
     return any(kw in text for kw in keywords)
 
 
+def goto_with_retry(page, url: str, wait_selector: str | None = None, retries: int = 3):
+    """带重试机制的页面跳转，使用 domcontentloaded 避免卡死"""
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            print(f"正在访问 ({attempt}/{retries}): {url}")
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            if wait_selector:
+                page.wait_for_selector(wait_selector, timeout=30000)
+            return
+        except Exception as e:
+            last_err = e
+            print(f"第 {attempt} 次访问失败: {e}")
+            if attempt < retries:
+                time.sleep(5)
+    raise last_err
+
+
 def extract_body_text(page, url: str) -> str:
     """复用同一浏览器会话访问详情页并提取正文"""
-    page.goto(url, wait_until="networkidle", timeout=45000)
+    goto_with_retry(page, url, wait_selector="#zoom, .content, body", retries=2)
 
-    # 央行官网详情页正文通常位于 #zoom 容器内，若改版则逐级降级
     for selector in ("#zoom", ".content", "body"):
         locator = page.locator(selector).first
         if locator.count() > 0:
@@ -67,7 +81,6 @@ def extract_body_text(page, url: str) -> str:
 
 
 def check_updates(seen_urls: set, is_first_run: bool) -> tuple[list[dict], list[dict]]:
-    """抓取列表页，并对符合标题条件的新公告抓取正文进行二次过滤"""
     all_items = []
     matched_items = []
 
@@ -83,12 +96,24 @@ def check_updates(seen_urls: set, is_first_run: bool) -> tuple[list[dict], list[
                 "Chrome/131.0.0.0 Safari/537.36"
             ),
             viewport={"width": 1280, "height": 800},
+            locale="zh-CN",
+        )
+        # 隐藏 webdriver 特征
+        context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
         page = context.new_page()
 
+        # 拦截图片、字体、样式表、媒体文件，加快跨国加载速度
+        page.route(
+            "**/*",
+            lambda route: route.abort()
+            if route.request.resource_type in {"image", "media", "font", "stylesheet"}
+            else route.continue_()
+        )
+
         try:
-            page.goto(TARGET_URL, wait_until="networkidle", timeout=45000)
-            page.wait_for_selector("a[href*='/113469/']", timeout=20000)
+            goto_with_retry(page, TARGET_URL, wait_selector="a[href*='/113469/']", retries=3)
 
             links = page.locator(".newslist_style a").all()
             if not links:
@@ -109,11 +134,9 @@ def check_updates(seen_urls: set, is_first_run: bool) -> tuple[list[dict], list[
                 if title:
                     all_items.append({"title": title, "url": full_url})
 
-            # 首次运行只记录历史，不逐条进详情页
             if is_first_run:
                 return all_items, []
 
-            # 对新增公告执行：标题过滤 -> 正文抓取 -> 正文过滤
             for item in all_items:
                 if item["url"] in seen_urls:
                     continue
@@ -154,7 +177,6 @@ def send_email(new_items: list[dict]):
     blocks = []
     for item in new_items:
         safe_title = html.escape(item["title"])
-        # 截取前 1500 字作为邮件正文预览，避免超长公告影响阅读
         raw_body = item.get("body", "")
         preview = raw_body[:1500] + ("……\n（正文较长，请点击标题查看原文）" if len(raw_body) > 1500 else "")
         safe_body = html.escape(preview).replace("\n", "<br>")
@@ -203,7 +225,6 @@ def main():
     if not all_items:
         raise RuntimeError("未提取到任何公告，可能触发了反爬或海外节点访问超时。")
 
-    # 将本次扫描到的所有公告链接都加入已读记录
     has_new_url = False
     for item in all_items:
         if item["url"] not in seen_urls:

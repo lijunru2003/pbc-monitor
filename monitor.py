@@ -15,8 +15,8 @@ TARGET_URL = "https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html"
 HISTORY_FILE = "pbc_seen.json"
 
 # ================= 关键词过滤配置 =================
-TITLE_KEYWORDS = ["公告", "计划"]
-BODY_KEYWORDS = ["纪念币"]
+TITLE_KEYWORDS = ["互换", "协议"]
+BODY_KEYWORDS = ["协议"]
 # ==================================================
 
 SMTP_HOST = os.environ.get("SMTP_HOST", "")

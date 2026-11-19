@@ -17,7 +17,7 @@ jobs:
       - name: Random delay for scheduled runs
         if: github.event_name == 'schedule'
         run: |
-          DELAY=$(shuf -i 60-480 -n 1)
+          DELAY=$(shuf -i 10-40 -n 1)
           echo "随机等待 ${DELAY} 秒后开始抓取..."
           sleep $DELAY
 

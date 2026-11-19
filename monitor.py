@@ -16,7 +16,7 @@ HISTORY_FILE = "pbc_seen.json"
 
 # ================= 标题关键词配置 =================
 # 标题包含以下任意一个词即触发提醒（留空 [] 表示所有新公告都提醒）
-TITLE_KEYWORDS = ["报告", "计划"]
+TITLE_KEYWORDS = ["公告", "计划"]
 # ==================================================
 
 SMTP_HOST = os.environ.get("SMTP_HOST", "")
@@ -89,7 +89,6 @@ def check_updates(seen_urls: set, is_first_run: bool) -> tuple[list[dict], list[
         )
         page = context.new_page()
 
-        # 拦截图片、字体、样式表、媒体文件，加快加载速度
         page.route(
             "**/*",
             lambda route: route.abort()
